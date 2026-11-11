@@ -12,18 +12,38 @@ protocol GuestClipboard: AnyObject {
 @MainActor
 final class SystemGuestClipboard: GuestClipboard {
     static let shared = SystemGuestClipboard()
-    private let pasteboard = NSPasteboard.general
+    private let pasteboard: NSPasteboard
+    private let staging: ClipboardFileStaging
+
+    init(pasteboard: NSPasteboard = .general,
+         stagingRoot: URL = FileManager.default.temporaryDirectory.appendingPathComponent("VirtualBuddyClipboardFiles", isDirectory: true)) {
+        self.pasteboard = pasteboard
+        staging = ClipboardFileStaging(root: stagingRoot)
+    }
+
     var changeCount: Int { pasteboard.changeCount }
     func read() -> [ClipboardItem] {
         let types: [NSPasteboard.PasteboardType] = [.string, .rtf, .rtfd, .pdf, .png, .tiff]
-        return types.compactMap { type in
+        let items: [ClipboardItem] = types.compactMap { type in
             if type == .tiff, pasteboard.types?.contains(.png) == true { return nil }
             return pasteboard.data(forType: type).map { ClipboardItem(type: type.rawValue, data: $0) }
         }
+        // Copied files go first; the other items stay for peers without file support.
+        guard let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+              let files = ClipboardFile.read(urls) else { return items }
+        return files.compactMap(\.item) + items
     }
     func write(_ items: [ClipboardItem]) {
         pasteboard.clearContents()
-        for item in items { pasteboard.setData(item.data, forType: .init(item.type)) }
+        let files = items.compactMap(ClipboardFile.init)
+        if !files.isEmpty, let urls = try? staging.stage(files) {
+            pasteboard.writeObjects(urls as [NSURL])
+            return
+        }
+        staging.removeCurrent()
+        for item in items where item.type != ClipboardFile.type {
+            pasteboard.setData(item.data, forType: .init(item.type))
+        }
     }
 }
 

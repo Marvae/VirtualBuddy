@@ -370,6 +370,19 @@ struct GuestSessionTests {
         #expect(files.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
     }
 
+    @Test func copiedFilesTravelBothWaysThroughTheSession() async throws {
+        let toGuest = try #require(ClipboardFile(name: "recording.mov", contents: Data(repeating: 0x5A, count: 9 * 1024 * 1024)).item)
+        let fixture = await SessionFixture.make(hostItems: [toGuest] + clipboard("recording.mov"))
+        try await fixture.connect()
+        #expect(fixture.guestClipboard.items == [toGuest] + clipboard("recording.mov"))
+        #expect(await fixture.hostConnection.sentFiles == 1)
+
+        let toHost = try #require(ClipboardFile(name: "notes.txt", contents: Data("from the VM".utf8)).item)
+        fixture.guestClipboard.write([toHost])
+        try await eventually { fixture.hostClipboard.items == [toHost] }
+        await fixture.stop()
+    }
+
     @Test func newerClipboardSupersedesSlowTransfer() async throws {
         let fixture = await SessionFixture.make()
         try await fixture.connect()
